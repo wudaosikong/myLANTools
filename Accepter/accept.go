@@ -1,0 +1,5 @@
+package Accepter
+
+func Accept()  {
+	
+}
