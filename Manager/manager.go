@@ -3,8 +3,8 @@ package Manager
 import (
 	"fmt"
 	"io/ioutil"
-	"myLANTools/Sender"
 	"myLANTools/Accepter"
+	"myLANTools/Sender"
 
 	"github.com/fatih/color"
 )
@@ -16,8 +16,6 @@ type GUI struct {
 	LocalIP   []string
 	func_list map[string]func()
 }
-
-var filePort string = ":10240"
 
 var doc = map[string]string{
 	"ls_file": "显示当前目录文件",
