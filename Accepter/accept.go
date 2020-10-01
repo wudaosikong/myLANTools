@@ -2,10 +2,10 @@ package Accepter
 
 import (
 	"fmt"
-	"net"
-	"strconv"
-
 	"github.com/fatih/color"
+	"net"
+	"os"
+	"strconv"
 )
 
 var dataRead DataRead
@@ -29,19 +29,19 @@ func (h Host) Connect() *net.TCPConn {
 func Accept() bool {
 	host.IP = "0.0.0.0"
 	host.Port = port
-
-	AcceptInfo()
+	conn := host.Connect()
+	defer conn.Close()
+	AcceptInfo(conn)
 
 	fileLen := int(dataRead.FileLen)
 	for i := 0; i < fileLen; i++ {
-
+		dataPack.UnPack(conn)
+		dataPack.Receive(conn)
 	}
 	return true
 }
 
-func AcceptInfo() bool {
-	conn := host.Connect()
-	defer conn.Close()
+func AcceptInfo(conn *net.TCPConn) bool {
 	dataRead.SizeTotal = AcceptSize(conn)
 	if dataRead.SizeTotal == 0 {
 		color.Red("接收文件总大小有误")
@@ -52,22 +52,37 @@ func AcceptInfo() bool {
 		color.Red("接收文件数量有误")
 		return false
 	}
+	dataRead.Folder = AcceptPath(conn)
+	if len(dataRead.Folder) != 0 {
+		for n, tmp := 1, dataRead.Folder; IsExit(dataRead.Folder); {
+			dataRead.Folder = tmp + "-副本" + strconv.Itoa(n)
+			n++
+		}
+		_ = os.MkdirAll(dataRead.Folder, os.ModePerm)
+	}
+
 	return true
 }
 
-func FileReceive(filename string, conn *net.TCPConn, size int64) bool {
+func (dp *DataPack) UnPack(conn *net.TCPConn) {
+	//dp.Connect = host.Connect()
+	dp.FilePath = AcceptPath(conn)
+	dp.FileSize = int(AcceptSize(conn))
+}
+
+func (dp DataPack) Receive(conn *net.TCPConn) bool {
 	data := make(chan []byte, blockSize)
 	writerResult := make(chan bool)
 	receiveResult := make(chan bool)
 	counter := make(chan int64)
 	go func() {
-		writerResult <- FileWriter(filename, data)
+		writerResult <- FileWriter(dp.FilePath, data)
 	}()
 	go func() {
 		receiveResult <- Receiver(conn, data, true, counter)
 	}()
 
-	go DisplayCounterAccept(size, counter)
+	go DisplayCounterAccept(dataRead.SizeTotal, int64(dp.FileSize), counter)
 	if <-writerResult && <-receiveResult {
 		return true
 	} else {
@@ -76,17 +91,11 @@ func FileReceive(filename string, conn *net.TCPConn, size int64) bool {
 	}
 }
 
-func (dp *DataPack) UnPack(i int) {
-	dp.Connect = host.Connect()
-	dp.FilePath = dataRead.PathArry[i]
-	dp.FileSize = dataRead.SizeArry[i]
-}
-
 func AcceptPath(conn *net.TCPConn) string {
 	tmp := make([]byte, 200)
 	n, err := conn.Read(tmp)
 	if err != nil {
-		color.Red("接收文件信息&文件名失败", err)
+		color.Red("接收文件路径失败", err)
 		tmp = []byte("fail")
 		_, _ = conn.Write(tmp)
 		return ""
@@ -110,4 +119,21 @@ func AcceptSize(conn *net.TCPConn) int64 {
 	tmp = []byte("success")
 	_, _ = conn.Write(tmp)
 	return res
+}
+
+var acceptSize int64
+func DisplayCounterAccept(totalSize int64, fileSize int64, counter chan int64) {
+	var tmpSize = int64(0)
+	green := color.New(color.FgGreen)
+	for tmp := range counter {
+		tmpSize += tmp
+		if tmpSize > fileSize {
+			tmp = fileSize % blockSize
+		}
+		acceptSize += tmp
+		_, _ = green.Printf("总进度：%d%%\r", int(float64(acceptSize)/float64(totalSize)*100))
+	}
+	if acceptSize == totalSize {
+		color.Yellow("\n所有文件已接收！")
+	}
 }

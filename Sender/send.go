@@ -2,11 +2,11 @@ package Sender
 
 import (
 	"fmt"
-	"myLANTools/Share"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/fatih/color"
 )
@@ -23,28 +23,32 @@ func (h Host) Connect() *net.TCPConn {
 var dataRead DataRead
 var dataPack DataPack
 var host Host
-
+var start time.Time
 func Send(dir string, ip string) bool {
 	host.IP = ip
 	host.Port = port
 
 	dataRead.Read(dir, ip)
-	SendInfo()
+	conn := host.Connect()
+	start=time.Now()
+	defer conn.Close()
+	SendInfo(conn)
 
-	for i, _ := range dataRead.PathArry {
+	for i, _ := range dataRead.PathArray {
 		dataPack.Pack(i)
-		dataPack.Send()
+		dataPack.Send(conn)
 	}
 	return true
 }
 
-func SendInfo() bool {
-	conn := host.Connect()
-	defer conn.Close()
+func SendInfo(conn *net.TCPConn) bool {
 	if !SendSize(dataRead.SizeTotal, conn) {
 		return false
 	}
 	if !SendSize(dataRead.FileLen, conn) {
+		return false
+	}
+	if !SendPath(dataRead.Folder, conn) {
 		return false
 	}
 	return true
@@ -53,41 +57,45 @@ func SendInfo() bool {
 func (dr *DataRead) Read(dir string, ip string) {
 	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if !info.IsDir() {
-			dr.PathArry = append(dr.PathArry, path)
-			dr.SizeArry = append(dr.SizeArry, info.Size())
-			dr.SizeTotal += dr.SizeTotal
+			tmp := filepath.ToSlash(path)
+			dr.PathArray = append(dr.PathArray, tmp)
+			dr.SizeArray = append(dr.SizeArray, info.Size())
+			dr.SizeTotal += info.Size()
 		}
 		return nil
 	})
-	dr.FileLen = int64(len(dataRead.PathArry))
+	dr.FileLen = int64(len(dataRead.PathArray))
+	if info, _ := os.Stat(dir); info.IsDir() {
+		dr.Folder = dir
+	}
 }
 
 func (dp *DataPack) Pack(i int) {
-	dp.Connect = host.Connect()
-	dp.FilePath = dataRead.PathArry[i]
-	dp.FileSize = dataRead.SizeArry[i]
+	//dp.Connect = host.Connect()
+	dp.FilePath = dataRead.PathArray[i]
+	dp.FileSize = dataRead.SizeArray[i]
 }
 
-func (dp DataPack) Send() bool {
-	if !SendPath(dp.FilePath, dp.Connect) {
+func (dp DataPack) Send(conn *net.TCPConn) bool {
+	if !SendPath(dp.FilePath, conn) {
 		return false
 	}
-	if !SendSize(dp.FileSize, dp.Connect) {
+	if !SendSize(dp.FileSize, conn) {
 		return false
 	}
 
 	readerResult := make(chan bool)
 	senderResult := make(chan bool)
 	counter := make(chan int64)
-	data := make(chan []byte, 1024)
+	data := make(chan []byte, blockSize)
 	go func() {
-		readerResult <- Share.FileReader(dp.FilePath, data)
+		readerResult <- FileReader(dp.FilePath, data)
 	}()
 	go func() {
-		senderResult <- Share.Sender(dp.Connect, data, true, counter)
+		senderResult <- Sender(conn, data, true, counter)
 	}()
 
-	go DisplayCounterSend(dataRead.SizeTotal, counter)
+	go DisplayCounterSend(dataRead.SizeTotal, dp.FileSize, counter)
 
 	if <-readerResult && <-senderResult {
 		return true
@@ -101,7 +109,7 @@ func SendPath(path string, client *net.TCPConn) bool {
 	tmpName := []byte(path)
 	_, err := client.Write(tmpName)
 	if err != nil {
-		color.Red("发送文件(夹)名失败", err)
+		color.Red("发送文件路径失败", err)
 		return false
 	}
 	tmp := make([]byte, 7)
@@ -130,20 +138,21 @@ func SendSize(size int64, client *net.TCPConn) bool {
 	return true
 }
 
-func DisplayCounterSend(size int64, counter chan int64) {
-	var sendSize int64
+var sendSize int64
+func DisplayCounterSend(totalSize int64, fileSize int64, counter chan int64) {
+	var tmpSize = int64(0)
 	green := color.New(color.FgGreen)
 	for tmp := range counter {
+		tmpSize += tmp
+		if tmpSize > fileSize {
+			tmp = fileSize % blockSize
+		}
 		sendSize += tmp
-		_, _ = green.Printf("总进度：%d%%\r", int(float64(sendSize)/float64(size)*100))
+		_, _ = green.Printf("总进度：%d%%\r", int(float64(sendSize)/float64(totalSize)*100))
 	}
-	fmt.Println("")
-}
-
-func isFile(dir string) bool {
-	f, _ := os.Stat(dir)
-	if f.IsDir() {
-		return false
+	if sendSize == totalSize {
+		cost := time.Since(start)
+		color.Yellow("\n所有文件已发送！\n")
+		fmt.Printf("耗时：%d s\n速度：%.2f Mb/s",int(cost.Seconds()),float64(totalSize)/cost.Seconds()/1024/1024)
 	}
-	return true
 }

@@ -1,20 +1,18 @@
 package Accepter
 
-import "net"
-
 const (
-	port      = ":10010"
+	port      = ":10086"
 	blockSize = 4096
 )
 
 type DataRead struct {
 	SizeTotal int64
 	FileLen   int64
+	Folder	string
 }
 type DataPack struct {
 	FilePath string
-	FileSize int64
-	Connect  *net.TCPConn
+	FileSize int
 }
 
 type Host struct {
